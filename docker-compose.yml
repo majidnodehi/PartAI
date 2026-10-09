@@ -1,0 +1,97 @@
+name: partai
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  agent:
+    build:
+      context: ./agent
+    restart: unless-stopped
+    init: true
+    environment:
+      AGENT_INSTANCE_ID: k7m2qx
+      PORT: "3000"
+      EVENT_COUNT: "5"
+      INTERVAL_SECONDS: "1"
+      EVENT_BUFFER_SIZE: "512"
+      WS_PATH: /events
+      LOG_EVERY_SECONDS: "30"
+      MAX_BUFFERED_BYTES: "1048576"
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/diagnostics').then((response)=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  process:
+    build:
+      context: ./process
+    restart: unless-stopped
+    init: true
+    environment:
+      PORT: "3001"
+      MONGODB_URI: mongodb://mongo:27017/process
+      REDIS_URL: redis://redis:6379
+      AGENT_BASE_URL: http://agent:3000
+      REDIS_EVENT_MAXLEN: "100000"
+    ports:
+      - "3001:3001"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      agent:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/status').then((response)=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  mongo-data:
+  redis-data:
